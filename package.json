@@ -1,0 +1,19 @@
+{
+  "name": "litechat",
+  "version": "1.0.0",
+  "description": "Temporary, disposable chat rooms with 4-character codes.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:persist": "node -e \"process.env.DATA_DIR = process.env.DATA_DIR || './data'; import('./server.js')\"",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=16.13"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}
