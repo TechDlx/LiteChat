@@ -1,0 +1,17 @@
+# Render Blueprint. With this file in the repo root, Render can create the
+# service for you: New -> Blueprint -> pick the repo.
+#
+# Note on persistence: Render's free plan has no disk, so DATA_DIR is left
+# unset and rooms live in memory only. To make rooms survive restarts, move to
+# a paid instance, attach a disk mounted at /data, and set DATA_DIR=/data.
+services:
+  - type: web
+    name: litechat
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PORT
+        value: 3000
