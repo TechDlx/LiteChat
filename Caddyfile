@@ -1,0 +1,17 @@
+# Automatic HTTPS via Let's Encrypt. DOMAIN and ACME_EMAIL come from .env.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Caddy upgrades WebSocket connections through reverse_proxy automatically.
+	reverse_proxy litechat:3000
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+}

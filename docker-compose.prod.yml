@@ -1,0 +1,35 @@
+# Production stack: the app plus Caddy for automatic HTTPS.
+# Copy .env.example to .env and fill it in first, then:
+#   docker compose -f docker-compose.prod.yml up -d --build
+services:
+  litechat:
+    build: .
+    environment:
+      PORT: 3000
+      DATA_DIR: /data
+    volumes:
+      - litechat-data:/data
+    expose:
+      - "3000"          # internal only; Caddy is the public entrance
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data     # holds the TLS certificates - do not delete
+      - caddy-config:/config
+    depends_on:
+      - litechat
+    restart: unless-stopped
+
+volumes:
+  litechat-data:
+  caddy-data:
+  caddy-config:

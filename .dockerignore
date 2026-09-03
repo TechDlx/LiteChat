@@ -5,3 +5,9 @@ data
 *.log
 README.md
 docker-compose.yml
+docker-compose*.yml
+Caddyfile
+render.yaml
+DEPLOY-ORACLE.md
+.env
+.env.example

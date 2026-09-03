@@ -68,23 +68,16 @@ expiry effectively becomes "until the server restarts." Koyeb's free tier behave
 
 ### Free *and* actually persistent: Oracle Cloud Always Free VM
 
-An always-on VM with a real disk, so the 30-day lifetime means what it says.
+An always-on VM with a real disk, so the 30-day lifetime means what it says. The stack is
+the app plus [Caddy](https://caddyserver.com/) for automatic HTTPS:
 
 ```bash
-# on the VM, after installing Docker + the compose plugin
-git clone <your-repo> litechat && cd litechat
-docker compose up -d --build
+cp .env.example .env && nano .env          # set DOMAIN and ACME_EMAIL
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Then put [Caddy](https://caddyserver.com/) in front for automatic HTTPS — a two-line `Caddyfile`:
-
-```
-chat.example.com {
-  reverse_proxy localhost:3000
-}
-```
-
-Caddy proxies WebSocket upgrades without extra configuration.
+**Full walkthrough: [DEPLOY-ORACLE.md](DEPLOY-ORACLE.md)** — creating the VM, the two
+firewalls Oracle makes you open, DNS, certificates, updates and backups.
 
 ### Fly.io
 
@@ -110,6 +103,8 @@ Browser (static HTML/CSS/JS)  ──HTTP──►  Node server ──► rooms i
 | [lib/store.js](lib/store.js) | Debounced atomic JSON snapshot |
 | [lib/names.js](lib/names.js) | Random name and colour assignment |
 | [public/](public/) | The entire frontend — three files, no build |
+| [docker-compose.prod.yml](docker-compose.prod.yml) + [Caddyfile](Caddyfile) | Production stack with automatic HTTPS |
+| [render.yaml](render.yaml) | Render blueprint for the one-click path |
 
 ### Limits
 
