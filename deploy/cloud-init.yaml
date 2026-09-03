@@ -1,0 +1,56 @@
+#cloud-config
+# LiteChat bootstrap that runs automatically on the VM's FIRST boot.
+#
+# Where to paste it:
+#   Create instance -> Advanced options -> Management -> Initialization script
+#   -> "Paste cloud-init script"
+#
+# EDIT DOMAIN and ACME_EMAIL in the script below before pasting.
+# Only runs on first boot, so it is for a brand-new instance. For one that is
+# already running, use deploy/bootstrap.sh through Run Command or Cloud Shell.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - git
+  - curl
+  - ca-certificates
+
+write_files:
+  - path: /root/bootstrap.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euxo pipefail
+
+      DOMAIN="chat.example.com"
+      ACME_EMAIL="you@example.com"
+      REPO="https://github.com/TechDlx/LiteChat.git"
+      APP_DIR=/opt/litechat
+
+      # Rules must land ABOVE the chain's REJECT/DROP or they are never reached.
+      for PORT in 80 443; do
+        iptables -C INPUT -m state --state NEW -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null && continue
+        POS=$(iptables -L INPUT --line-numbers -n | awk '$2=="REJECT" || $2=="DROP" {print $1; exit}')
+        iptables -I INPUT "${POS:-1}" -m state --state NEW -p tcp --dport "$PORT" -j ACCEPT
+      done
+
+      echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+      echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
+      DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+      netfilter-persistent save
+
+      curl -fsSL https://get.docker.com | sh
+      usermod -aG docker ubuntu 2>/dev/null || true
+      systemctl enable --now docker
+
+      git clone "$REPO" "$APP_DIR"
+      cd "$APP_DIR"
+      printf 'DOMAIN=%s\nACME_EMAIL=%s\n' "$DOMAIN" "$ACME_EMAIL" > .env
+      docker compose -f docker-compose.prod.yml up -d --build
+
+runcmd:
+  - [ bash, /root/bootstrap.sh ]
+
+final_message: "LiteChat bootstrap finished after $UPTIME seconds"

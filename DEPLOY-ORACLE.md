@@ -87,12 +87,32 @@ Add two rules:
 ### 3b. The VM's own firewall
 
 Do this after you SSH in (next step). Ubuntu images on Oracle ship with restrictive
-`iptables` rules that silently drop web traffic:
+`iptables` rules that silently drop web traffic.
+
+The new rules must land **above** the chain's `REJECT` rule. iptables stops at the first
+match, so a rule below the REJECT is never reached — the ports look open in `iptables -L`
+and nothing gets through. The REJECT's line number differs between images, so look it up
+rather than assuming:
 
 ```bash
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+sudo iptables -L INPUT -n --line-numbers          # note the REJECT line number
+```
+
+Insert at that number (replace `5` if yours differs):
+
+```bash
+sudo iptables -I INPUT 5 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+sudo iptables -I INPUT 5 -m state --state NEW -p tcp --dport 443 -j ACCEPT
 sudo netfilter-persistent save
+sudo iptables -L INPUT -n --line-numbers          # both ACCEPTs must be ABOVE the REJECT
+```
+
+Already added them below the REJECT? Delete first, highest number first so the numbering
+does not shift under you:
+
+```bash
+sudo iptables -D INPUT 7
+sudo iptables -D INPUT 6
 ```
 
 On **Oracle Linux** instead:
