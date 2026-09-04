@@ -1,10 +1,18 @@
-# Automatic HTTPS via Let's Encrypt. DOMAIN and ACME_EMAIL come from .env.
+# Automatic HTTPS via Let's Encrypt. DOMAIN, IMAGE_DOMAIN and ACME_EMAIL come
+# from .env.
 {
 	email {$ACME_EMAIL}
 }
 
+# --- the app ----------------------------------------------------------------
 {$DOMAIN} {
 	encode zstd gzip
+
+	# Room-quota errors are nicer than a truncated upload; keep this a little
+	# above the app's own 3 MB limit so the app is the one that says no.
+	request_body {
+		max_size 4MB
+	}
 
 	# Caddy upgrades WebSocket connections through reverse_proxy automatically.
 	reverse_proxy litechat:3000
@@ -13,5 +21,29 @@
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
+	}
+}
+
+# --- user-uploaded images ---------------------------------------------------
+# A separate origin, so that anything which somehow survived re-encoding still
+# cannot reach the app's DOM, storage or session.
+{$IMAGE_DOMAIN} {
+	root * /srv/uploads
+
+	# Only .webp is ever served. The app writes nothing else, and this makes a
+	# stray file in the directory unreachable rather than merely unlikely.
+	@webp path_regexp ^/[A-Z0-9]{4}/[0-9a-f]{32}\.webp$
+	route {
+		file_server @webp
+		respond 404
+	}
+
+	header {
+		Content-Type "image/webp"
+		Content-Security-Policy "default-src 'none'; sandbox"
+		X-Content-Type-Options "nosniff"
+		Cross-Origin-Resource-Policy "cross-origin"
+		Referrer-Policy "no-referrer"
+		Cache-Control "public, max-age=31536000, immutable"
 	}
 }

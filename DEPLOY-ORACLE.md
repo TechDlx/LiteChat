@@ -3,8 +3,9 @@
 An always-on VM with a real disk, so rooms genuinely survive until their 30-day
 idle expiry. Budget about 30 minutes for the first run.
 
-You end up with: `https://chat.yourdomain.com` served by Caddy, which proxies to the
-app container, with certificates renewed automatically and everything restarting on reboot.
+You end up with two hostnames served by Caddy: `https://chat.yourdomain.com` proxying to
+the app container, and `https://i.yourdomain.com` serving uploaded images from a separate
+origin. Certificates renew automatically and everything restarts on reboot.
 
 ---
 
@@ -166,34 +167,42 @@ cp .env.example .env
 nano .env
 ```
 
-Set both values:
+Set all three values:
 
 ```
 DOMAIN=chat.yourdomain.com
+IMAGE_DOMAIN=i.yourdomain.com
 ACME_EMAIL=you@example.com
 ```
 
-`DOMAIN` must be the exact hostname you will use — Caddy requests a certificate for
-precisely this name. `ACME_EMAIL` is where Let's Encrypt sends expiry warnings.
+`DOMAIN` and `IMAGE_DOMAIN` must be the exact hostnames you will use — Caddy requests a
+certificate for precisely these names. `ACME_EMAIL` is where Let's Encrypt sends expiry
+warnings.
+
+`IMAGE_DOMAIN` is a genuinely separate origin, not decoration: it is what stops a file that
+somehow survived re-encoding from reaching the app's session or DOM.
 
 ---
 
 ## 6. Point DNS at the VM
 
-In Cloudflare (or wherever your DNS lives), add:
+In Cloudflare (or wherever your DNS lives), add **two** records pointing at the same VM:
 
 | Type | Name | Value | Proxy status |
 | --- | --- | --- | --- |
 | `A` | `chat` | your VM's public IP | **DNS only** (grey cloud) |
+| `A` | `i` | your VM's public IP | **DNS only** (grey cloud) |
 
-Grey cloud matters right now: Caddy proves it controls the domain over plain HTTP, and
+Grey cloud matters right now: Caddy proves it controls each domain over plain HTTP, and
 that check has to reach your VM directly. You can enable Cloudflare's proxy afterwards
 (see step 9).
 
-Confirm it has propagated before continuing:
+Confirm both have propagated before continuing — Caddy will fail to get a certificate for
+whichever one does not resolve:
 
 ```bash
 dig +short chat.yourdomain.com     # should print your VM's IP
+dig +short i.yourdomain.com        # the same IP
 ```
 
 ---
@@ -210,19 +219,26 @@ The first build takes a few minutes on ARM. Then:
 docker compose -f docker-compose.prod.yml logs -f
 ```
 
-You are looking for two things:
+You are looking for these, and for `certificate obtained successfully` **twice** — once
+per hostname:
 
 ```
 litechat-1  | LiteChat listening on http://0.0.0.0:3000
 litechat-1  | storage: disk (DATA_DIR=/data)
+litechat-1  | uploads: on, served from https://i.yourdomain.com (0.0 MB in use)
 caddy-1     | certificate obtained successfully
 ```
+
+If the app logs `uploads: off`, the reason is printed alongside it — usually a missing
+sharp binary or an unwritable directory. The chat still works; only attachments are
+unavailable.
 
 `Ctrl-C` stops following the logs; the containers keep running.
 
 Open `https://chat.yourdomain.com`. Create a room in one browser, join it from another
 device with the code, and send a message — that confirms the WebSocket upgrade is
-passing through Caddy.
+passing through Caddy. Then paste or drag in an image and check that it appears on both
+devices, with a URL on `i.yourdomain.com`.
 
 ---
 
@@ -288,6 +304,13 @@ curl https://chat.yourdomain.com/api/health
 docker compose -f docker-compose.prod.yml cp litechat:/data/rooms.json ./rooms-backup.json
 ```
 
+**Check image storage:**
+
+```bash
+curl -s https://chat.yourdomain.com/api/health
+# {"ok":true,"rooms":3,"persistent":true,"uploads":{"enabled":true,"bytes":...}}
+```
+
 **Stop / start:**
 
 ```bash
@@ -308,6 +331,9 @@ certificates, and re-requesting certificates too often hits Let's Encrypt rate l
 | Caddy logs a certificate failure | Port 80 unreachable from the internet, DNS not yet pointing at the VM, or Cloudflare's proxy left on. Fix, then `docker compose -f docker-compose.prod.yml restart caddy`. |
 | `dig` returns the wrong IP or nothing | DNS has not propagated, or the record is proxied. Wait, or set the record to DNS only. |
 | Page loads but messages never send | Something between you and Caddy is blocking WebSockets — a corporate proxy, or `Full (strict)` not set if you enabled the Cloudflare proxy. |
+| No attach button in the composer | The server has uploads off. `curl .../api/health` and read `uploads`; the startup log gives the reason. |
+| Images upload but show as broken | `i.yourdomain.com` has no certificate or no DNS record. Check `docker compose -f docker-compose.prod.yml logs caddy` for that hostname. |
+| Uploads fail with 507 | A room hit its 30 MB, or the server hit 500 MB. `/api/health` shows the global figure. |
 | `permission denied` on `docker` | You skipped `newgrp docker`, or need to log out and back in. |
 | Build killed partway on E2.1.Micro | 1 GB of RAM is tight. Add swap: `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`. |
 

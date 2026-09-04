@@ -11,4 +11,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  litechat-data:
+  litechat-data:   # uploads live in ./data/uploads inside this volume
