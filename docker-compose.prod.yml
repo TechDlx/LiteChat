@@ -7,8 +7,10 @@ services:
     environment:
       PORT: 3000
       DATA_DIR: /data
+      IMAGE_BASE_URL: https://${IMAGE_DOMAIN}
     volumes:
       - litechat-data:/data
+      - litechat-uploads:/data/uploads
     expose:
       - "3000"          # internal only; Caddy is the public entrance
     restart: unless-stopped
@@ -20,16 +22,19 @@ services:
       - "443:443"
     environment:
       DOMAIN: ${DOMAIN}
+      IMAGE_DOMAIN: ${IMAGE_DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data     # holds the TLS certificates - do not delete
+      - litechat-uploads:/srv/uploads:ro   # read-only: Caddy serves, never writes
+      - caddy-data:/data                   # holds the TLS certificates - do not delete
       - caddy-config:/config
     depends_on:
       - litechat
     restart: unless-stopped
 
 volumes:
-  litechat-data:
+  litechat-data:        # rooms.json - never mounted into Caddy
+  litechat-uploads:     # images only - safe to expose as a web root
   caddy-data:
   caddy-config:

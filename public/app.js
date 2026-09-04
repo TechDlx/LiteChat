@@ -1,5 +1,6 @@
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const GROUP_WINDOW = 3 * 60 * 1000; // messages closer than this are visually grouped
+const ACCEPTED = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 
 const $ = (id) => document.getElementById(id);
 
@@ -11,17 +12,23 @@ const emptyState = $('emptyState');
 const inputEl = $('input');
 const sendBtn = $('sendBtn');
 const typingEl = $('typing');
+const attachBtn = $('attachBtn');
+const fileInput = $('fileInput');
+const dropHint = $('dropHint');
 
 let ws = null;
 let code = null;
 let me = null;
-let lastRow = null;      // { userId, ts, el } for grouping
+let token = null;
+let uploads = { enabled: false, baseUrl: '/i', maxBytes: 3 * 1024 * 1024 };
+let lastRow = null;      // { userId, ts } for grouping
 let typers = new Set();
 let typingSent = false;
 let typingTimer = null;
 let retries = 0;
 let reconnectTimer = null;
 let deliberateLeave = false;
+let dragDepth = 0;
 
 /* ---------------- helpers ---------------- */
 
@@ -43,7 +50,15 @@ const ERRORS = {
   invalid_code: 'That code does not look right.',
   not_found: 'No room with that code. It may have expired.',
   room_full: 'That room is full.',
-  rate_limited: 'Slow down a moment.'
+  rate_limited: 'Slow down a moment.',
+  image_missing: 'That image is no longer available.',
+  too_large: 'That image is too big.',
+  unsupported_type: 'That file is not an image we accept.',
+  room_quota: 'This room has used up its image space.',
+  server_full: 'The server is out of image space.',
+  uploads_disabled: 'Images are turned off on this server.',
+  decode_failed: 'That image could not be read.',
+  not_a_member: 'Rejoin the room and try again.'
 };
 
 function escapeHtml(s) {
@@ -73,6 +88,10 @@ function readToken(c) {
 
 function writeToken(c, t) {
   try { sessionStorage.setItem(tokenKey(c), t); } catch { /* private mode; name just won't survive a refresh */ }
+}
+
+function imageUrl(id) {
+  return `${uploads.baseUrl}/${code}/${id}.webp`;
 }
 
 /* ---------------- code input ---------------- */
@@ -164,6 +183,7 @@ function exitRoom(reason) {
   if (ws) { ws.close(); ws = null; }
   code = null;
   me = null;
+  token = null;
   history.replaceState(null, '', location.pathname);
   roomView.hidden = true;
   landing.hidden = false;
@@ -203,6 +223,27 @@ function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+/** Build the <a><img></a> for an image, sized from stored dimensions. */
+function imageNode(src, w, h, { lazy = true } = {}) {
+  const link = document.createElement('a');
+  link.className = 'shot';
+  link.href = src;
+
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = '';
+  if (lazy) img.loading = 'lazy';
+  // Reserving the box from the stored dimensions is what stops the message
+  // list jumping as images arrive.
+  if (w && h) {
+    img.width = w;
+    img.height = h;
+    link.style.aspectRatio = `${w} / ${h}`;
+  }
+  link.appendChild(img);
+  return link;
+}
+
 function addMessage(msg) {
   const stick = nearBottom();
   emptyState.hidden = true;
@@ -223,7 +264,23 @@ function addMessage(msg) {
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  bubble.innerHTML = linkify(msg.text);
+
+  if (msg.image) {
+    bubble.classList.add('has-image');
+    const src = imageUrl(msg.image.id);
+    const link = imageNode(src, msg.image.w, msg.image.h);
+    link.addEventListener('click', (e) => { e.preventDefault(); openLightbox(src); });
+    bubble.appendChild(link);
+    if (msg.text) {
+      const cap = document.createElement('div');
+      cap.className = 'caption';
+      cap.innerHTML = linkify(msg.text);
+      bubble.appendChild(cap);
+    }
+  } else {
+    bubble.innerHTML = linkify(msg.text);
+  }
+
   row.appendChild(bubble);
 
   const stamp = document.createElement('div');
@@ -264,8 +321,169 @@ function renderTyping() {
 function setConnected(on) {
   document.querySelector('.pulse').classList.toggle('off', !on);
   inputEl.disabled = !on;
+  attachBtn.disabled = !on;
   syncSendButton();
 }
+
+/* ---------------- lightbox ---------------- */
+
+const lightbox = $('lightbox');
+
+function openLightbox(src) {
+  $('lightboxImg').src = src;
+  lightbox.hidden = false;
+}
+
+function closeLightbox() {
+  lightbox.hidden = true;
+  $('lightboxImg').src = '';
+}
+
+lightbox.addEventListener('click', closeLightbox);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !lightbox.hidden) closeLightbox();
+});
+
+/* ---------------- uploading ---------------- */
+
+/** A local preview row shown while the file is in flight. */
+function pendingRow(file) {
+  emptyState.hidden = true;
+  const row = document.createElement('div');
+  row.className = 'row mine first pending';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble has-image';
+
+  const url = URL.createObjectURL(file);
+  const link = imageNode(url, 0, 0, { lazy: false });
+
+  const bar = document.createElement('div');
+  bar.className = 'progress';
+  const fill = document.createElement('span');
+  bar.appendChild(fill);
+  link.appendChild(bar);
+
+  bubble.appendChild(link);
+  row.appendChild(bubble);
+  messagesEl.appendChild(row);
+  scrollToBottom();
+
+  return {
+    row,
+    setProgress(p) { fill.style.width = `${Math.round(p * 100)}%`; },
+    fail(message) {
+      row.classList.remove('pending');
+      row.classList.add('failed');
+      bubble.className = 'bubble';
+      bubble.textContent = message;
+      URL.revokeObjectURL(url);
+      setTimeout(() => row.remove(), 5000);
+    },
+    done() {
+      URL.revokeObjectURL(url);
+      row.remove();
+    }
+  };
+}
+
+function post(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/rooms/${code}/uploads`);
+    xhr.setRequestHeader('x-litechat-token', token || '');
+    xhr.setRequestHeader('content-type', 'application/octet-stream');
+    // fetch() cannot report upload progress; XHR still can.
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    });
+    xhr.addEventListener('load', () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* keep the status code */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `http_${xhr.status}`));
+    });
+    xhr.addEventListener('error', () => reject(new Error('network')));
+    xhr.send(file);
+  });
+}
+
+async function upload(file) {
+  if (!uploads.enabled || !code) return;
+
+  if (!ACCEPTED.includes(file.type)) {
+    toast('Only JPEG, PNG, GIF and WebP images');
+    return;
+  }
+  if (file.size > uploads.maxBytes) {
+    toast(`Images must be under ${Math.round(uploads.maxBytes / 1048576)} MB`);
+    return;
+  }
+
+  const pending = pendingRow(file);
+  // Any text already typed rides along as a caption.
+  const caption = inputEl.value.trim();
+  if (caption) {
+    inputEl.value = '';
+    autoGrow();
+    syncSendButton();
+  }
+
+  try {
+    const { id } = await post(file, pending.setProgress);
+    pending.done();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ t: 'msg', imageId: id, text: caption }));
+    }
+  } catch (err) {
+    pending.fail(ERRORS[err.message] || 'Upload failed.');
+  }
+}
+
+function uploadAll(files) {
+  for (const f of files) upload(f);
+}
+
+attachBtn.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', () => {
+  uploadAll(fileInput.files);
+  fileInput.value = '';   // so picking the same file twice still fires
+});
+
+// Paste is how people actually send screenshots.
+document.addEventListener('paste', (e) => {
+  if (!uploads.enabled || !code || roomView.hidden) return;
+  const files = [...(e.clipboardData?.files || [])];
+  if (!files.length) return;
+  e.preventDefault();
+  uploadAll(files);
+});
+
+// Drag and drop over the room.
+roomView.addEventListener('dragenter', (e) => {
+  if (!uploads.enabled || !e.dataTransfer?.types.includes('Files')) return;
+  e.preventDefault();
+  dragDepth++;
+  dropHint.hidden = false;
+});
+
+roomView.addEventListener('dragover', (e) => {
+  if (uploads.enabled && e.dataTransfer?.types.includes('Files')) e.preventDefault();
+});
+
+roomView.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropHint.hidden = true;
+});
+
+roomView.addEventListener('drop', (e) => {
+  if (!uploads.enabled) return;
+  e.preventDefault();
+  dragDepth = 0;
+  dropHint.hidden = true;
+  uploadAll(e.dataTransfer.files);
+});
 
 /* ---------------- socket ---------------- */
 
@@ -286,6 +504,9 @@ function connect() {
 
     if (m.t === 'joined') {
       me = m.you;
+      token = m.token;
+      uploads = m.uploads || uploads;
+      attachBtn.hidden = !uploads.enabled;
       writeToken(m.code, m.token);
       $('youAre').textContent = `you are ${me.name}`;
       resetMessages();

@@ -12,6 +12,7 @@
 set -euxo pipefail
 
 DOMAIN="chat.example.com"
+IMAGE_DOMAIN="i.example.com"
 ACME_EMAIL="you@example.com"
 REPO="https://github.com/TechDlx/LiteChat.git"
 
@@ -51,7 +52,7 @@ else
 fi
 
 cd "$APP_DIR"
-printf 'DOMAIN=%s\nACME_EMAIL=%s\n' "$DOMAIN" "$ACME_EMAIL" > .env
+printf 'DOMAIN=%s\nIMAGE_DOMAIN=%s\nACME_EMAIL=%s\n' "$DOMAIN" "$IMAGE_DOMAIN" "$ACME_EMAIL" > .env
 
 docker compose -f docker-compose.prod.yml up -d --build
 
